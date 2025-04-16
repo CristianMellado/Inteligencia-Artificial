@@ -1,10 +1,11 @@
-﻿#include <GLFW/glfw3.h>
+#include <GLFW/glfw3.h>
 #include <iostream>
 #include <vector>
 #include <cmath>
 #include <map>
 #include <cstdlib>
 #include <ctime>
+#include <algorithm>
 
 #define WINDOW_WIDTH 800
 #define WINDOW_HEIGHT 600
@@ -19,8 +20,9 @@ float COLORS[MAX_COLORS][3] = {
 
 float GRAY[3] = { 0.5f, 0.5f, 0.5f };
 
-int heuristic = 1;
+int heuristic = 1; //1 = mas restrictiva, 2 = mas restringida
 int backtrackCount = 0;
+bool heuristicaActiva = false;
 
 struct Nodo {
     int id;
@@ -38,7 +40,7 @@ struct Grafo {
         nodo.id = nodos.size();
         nodo.x = x;
         nodo.y = y;
-        nodo.colorIndex = -1; //gris al inicio
+        nodo.colorIndex = -1; //color gris al inicio
         nodos.push_back(nodo);
     }
 
@@ -62,69 +64,61 @@ struct Grafo {
     }
 
     void conectarNodos(int id1, int id2) {
-        ///
-        int nodoA = id1;
-        int nodoB = id2;
+        if (std::find(nodos[id1].vecinos.begin(), nodos[id1].vecinos.end(), id2) != nodos[id1].vecinos.end())
+            return;
 
-        if (heuristic == 1) { //mas restrictiva: nodo con menos colores disponibles
-            if (coloresDisponibles(id1).size() < coloresDisponibles(id2).size()) {
-                nodoA = id1;
-                nodoB = id2;
-            }
-            else {
-                nodoA = id2;
-                nodoB = id1;
-            }
-        }
-        else if (heuristic == 2) { //mas restringida: nodo con más vecinos
-            if (nodos[id1].vecinos.size() > nodos[id2].vecinos.size()) {
-                nodoA = id1;
-                nodoB = id2;
-            }
-            else {
-                nodoA = id2;
-                nodoB = id1;
-            }
-        }
-        ////
-        //asigna color valido al nodoA si aun no tiene
-        if (nodos[nodoA].colorIndex == -1) {
-            std::vector<int> opcionesA = coloresDisponibles(nodoA);
-            if (!opcionesA.empty()) {
-                nodos[nodoA].colorIndex = colorMenosUsado(opcionesA);///
-            }
-            else {
-                backtrackCount++; //contador de fallos cuando no hay color valido
-                std::cout << "\n no hay colores disponibles para el nodo " << nodoA << ".\n";
-            }
-        }
-
-        //asigna color valido al nodoB si aun no tiene
-        if (nodos[nodoB].colorIndex == -1) {
-            std::vector<int> opcionesB = coloresDisponibles(nodoB);
-            if (!opcionesB.empty()) {
-                nodos[nodoB].colorIndex = colorMenosUsado(opcionesB);///
-            }
-            else {
-                backtrackCount++;
-                std::cout << "\nno hay colores disponibles para el nodo " << nodoB << ".\n";
-            }
-        }///
-
-        nodos[nodoA].vecinos.push_back(nodoB);
-        nodos[nodoB].vecinos.push_back(nodoA);
-        adyacencia[nodoA].push_back(nodoB);
-        adyacencia[nodoB].push_back(nodoA);
-
-        // Si nodoA no tenía color, asignarle uno válido
-        if (nodos[nodoA].colorIndex == -1) {
-            std::vector<int> dispA = coloresDisponibles(nodoA);
-            if (!dispA.empty()) {
-                nodos[nodoA].colorIndex = dispA[0];
-            }
-        }
+        nodos[id1].vecinos.push_back(id2);
+        nodos[id2].vecinos.push_back(id1);
+        adyacencia[id1].push_back(id2);
+        adyacencia[id2].push_back(id1);
     }
 
+    bool colorearNodo(int idNodo) {
+        for (int c = 0; c < MAX_COLORS; ++c) {
+            if (esColorValido(idNodo, c)) {
+                nodos[idNodo].colorIndex = c;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool colorearDesde(int index) {
+        if (index >= nodos.size()) return true;
+        if (nodos[index].vecinos.empty()) return colorearDesde(index + 1);
+
+        std::vector<int> orden;
+        for (int i = 0; i < nodos.size(); ++i) {
+            if (nodos[i].vecinos.empty()) continue;
+            orden.push_back(i);
+        }
+
+        if (heuristic == 1) {
+            std::sort(orden.begin(), orden.end(), [&](int a, int b) {
+                return coloresDisponibles(a).size() < coloresDisponibles(b).size();
+                });
+        }
+        else {
+            std::sort(orden.begin(), orden.end(), [&](int a, int b) {
+                return nodos[a].vecinos.size() > nodos[b].vecinos.size();
+                });
+        }
+
+        for (int i : orden) {
+            if (nodos[i].colorIndex != -1) continue;
+            for (int c = 0; c < MAX_COLORS; ++c) {
+                if (esColorValido(i, c)) {
+                    nodos[i].colorIndex = c;
+                    if (colorearDesde(index + 1)) return true;
+                    nodos[i].colorIndex = -1;
+                    backtrackCount++;
+                }
+            }
+            return false;
+        }
+        return true;
+    }
+    //
     int nodoClickeado(float mx, float my) {
         for (auto& nodo : nodos) {
             float dx = nodo.x - mx;
@@ -134,29 +128,13 @@ struct Grafo {
         }
         return -1;
     }
-    ///
-    int colorMenosUsado(const std::vector<int>& opciones) {
-        std::map<int, int> usoColor;
 
-        //cuenta las veces q se usa un color
+
+    void reiniciarColores() {
         for (auto& nodo : nodos) {
-            if (nodo.colorIndex != -1)
-                usoColor[nodo.colorIndex]++;
+            nodo.colorIndex = -1;
         }
-        //encuentra el color menos usado entre las opciones
-        int mejorColor = opciones[0];
-        int menorUso = usoColor[mejorColor];
-
-        for (int color : opciones) {
-            int uso = usoColor[color];
-            if (uso < menorUso) {
-                mejorColor = color;
-                menorUso = uso;
-            }
-        }
-        return mejorColor;
     }
-
 };
 
 Grafo grafo;
@@ -173,12 +151,21 @@ void dibujarCirculo(float cx, float cy, float r, float color[3]) {
     glEnd();
 }
 
+void dibujarLinea(float x1, float y1, float x2, float y2) {
+    glColor3f(0.2f, 0.2f, 0.2f);
+    glLineWidth(1.5f);
+    glBegin(GL_LINES);
+    glVertex2f(x1, y1);
+    glVertex2f(x2, y2);
+    glEnd();
+}
+
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         double mx, my;
         glfwGetCursorPos(window, &mx, &my);
         mx = (float)mx;
-        my = WINDOW_HEIGHT - (float)my; //
+        my = WINDOW_HEIGHT - (float)my;
 
         int id = grafo.nodoClickeado(mx, my);
         if (id == -1) {
@@ -198,8 +185,39 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     }
 }
 
+void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    if (action == GLFW_PRESS) {
+        if (key == GLFW_KEY_1) {
+            heuristic = 1;
+            heuristicaActiva = true;
+            backtrackCount = 0;
+            grafo.reiniciarColores();
+            grafo.colorearDesde(0);
+            std::cout << "\nHeuristica usada: Variable mas restrictiva.\n";
+            std::cout << "Backtracking realizado: " << backtrackCount << " veces\n";
+        }
+        else if (key == GLFW_KEY_2) {
+            heuristic = 2;
+            heuristicaActiva = true;
+            backtrackCount = 0;
+            grafo.reiniciarColores();
+            grafo.colorearDesde(0);
+            std::cout << "\nHeuristica usada: Variable mas restringida.\n";
+            std::cout << "Backtracking realizado: " << backtrackCount << " veces\n";
+        }
+    }
+}
+
 void render() {
     glClear(GL_COLOR_BUFFER_BIT);
+
+    for (auto& nodo : grafo.nodos) {
+        for (int vecino : nodo.vecinos) {
+            if (nodo.id < vecino) { //
+                dibujarLinea(nodo.x, nodo.y, grafo.nodos[vecino].x, grafo.nodos[vecino].y);
+            }
+        }
+    }
 
     for (auto& nodo : grafo.nodos) {
         if (nodo.colorIndex == -1) {
@@ -215,10 +233,8 @@ void render() {
 int main() {
     std::srand(static_cast<unsigned>(std::time(0)));
 
-    std::cout << "Seleccione heuristica:\n";
-    std::cout << "1. Variable mas restrictiva\n";
-    std::cout << "2. Variable mas restringida\n";
-    std::cin >> heuristic;
+    std::cout << "\nPresione 1 para la heuristica de la Variable mas restrictiva";
+    std::cout << "\nPresione 2 para la heuristica de la Variable mas restringida\n";
 
     if (!glfwInit()) return -1;
 
@@ -230,6 +246,7 @@ int main() {
 
     glfwMakeContextCurrent(window);
     glfwSetMouseButtonCallback(window, mouseButtonCallback);
+    glfwSetKeyCallback(window, keyCallback);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     glOrtho(0, WINDOW_WIDTH, 0, WINDOW_HEIGHT, -1, 1);
@@ -243,6 +260,5 @@ int main() {
 
     glfwDestroyWindow(window);
     glfwTerminate();
-    std::cout << "Cantidad de veces que se hizo backtracking: " << backtrackCount << "\n";
     return 0;
 }
